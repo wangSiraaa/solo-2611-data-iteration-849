@@ -5,6 +5,7 @@
     python3 -m solo revise ORIGINAL PATCHES.json
     python3 -m solo demo
     python3 -m solo check FILE
+    python3 -m solo ledger CONFIG.json [--time T] [--group G]
 
 ``revise`` reads a JSON batch:
 
@@ -12,6 +13,19 @@
         {"replace": [start_char, end_char, "text"]},
         {"preserve": [start_byte, end_byte]}
     ]}
+
+``ledger`` reads a JSON manifest of page files (each a real SOLO body) plus an
+optional union roster and prints notices, inheritance chains, byte ranges and
+the expected caller.  It never rewrites a page; corrections in the manifest
+are separate pinned versions::
+
+    {
+      "pages": [{"page": 1, "version": 0, "file": "p1.bin"}, ...],
+      "roster": {"G": {"rotation": ["A", "B", "C"],
+                        "qualified": ["A", "B", "C"],
+                        "qualified_from": {},
+                        "leaves": [{"worker": "B", "start": 1, "end": 2}]}}
+    }
 """
 
 from __future__ import annotations
@@ -21,7 +35,14 @@ import json
 import sys
 
 from .codec import CheckpointError, DecodeError, EncodeError, decode_document, encode_text
+from .ledger import (
+    LedgerError,
+    PageVersion,
+    format_ledger,
+    ledger_from_versions,
+)
 from .revision import RevisionError, RevisionLibrary, preserve, replace
+from .roster import GroupRoster, Leave, Roster, RosterError
 
 
 def _load(path: str) -> bytes:
@@ -103,6 +124,78 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_roster(spec: dict) -> Roster:
+    groups = []
+    for name, cfg in spec.items():
+        rotation = tuple(cfg["rotation"])
+        leaves = tuple(
+            Leave(item["worker"], int(item["start"]), int(item["end"]))
+            for item in cfg.get("leaves", [])
+        )
+        groups.append(
+            GroupRoster(
+                group=name,
+                rotation=rotation,
+                qualified=frozenset(cfg.get("qualified", rotation)),
+                qualified_from={
+                    worker: int(since)
+                    for worker, since in cfg.get("qualified_from", {}).items()
+                },
+                leaves=leaves,
+            )
+        )
+    return Roster(groups)
+
+
+def cmd_ledger(args: argparse.Namespace) -> int:
+    config = json.loads(_load(args.config).decode("utf-8"))
+    versions = [
+        PageVersion(
+            page=int(item["page"]),
+            version=int(item.get("version", 0)),
+            body=_load(item["file"]),
+            label=item.get("label", ""),
+        )
+        for item in config["pages"]
+    ]
+    try:
+        ledger = ledger_from_versions(versions)
+    except LedgerError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    calls = None
+    if "roster" in config:
+        try:
+            roster = _load_roster(config["roster"])
+        except (RosterError, KeyError, TypeError) as exc:
+            print(f"roster error: {exc}", file=sys.stderr)
+            return 2
+        selected = [
+            n
+            for n in ledger.notices
+            if (args.group is None or n.group == args.group)
+            and (args.time is None or n.time <= args.time)
+        ]
+        try:
+            calls = roster.replay(selected)
+        except RosterError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.time is not None and args.group is not None:
+            upcoming = roster.who_at(
+                [n for n in ledger.notices if n.group == args.group], args.time, args.group
+            )
+            print(f"# expected caller at time {args.time}: {upcoming[args.group]}", file=sys.stderr)
+
+    for line in format_ledger(ledger, calls=calls):
+        print(line)
+    if calls is not None:
+        disputes = [c for c in calls if c.disputed]
+        print(f"# {len(calls)} notices, {len(disputes)} disputes", file=sys.stderr)
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     body = _load(args.file)
     try:
@@ -142,6 +235,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check", help="validate a body")
     p.add_argument("file")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("ledger", help="resolve a paged ledger and union roster")
+    p.add_argument("config")
+    p.add_argument("--time", type=int, default=None)
+    p.add_argument("--group", default=None)
+    p.set_defaults(func=cmd_ledger)
     return parser
 
 

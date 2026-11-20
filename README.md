@@ -11,9 +11,13 @@
 | `solo/revision.py` | 修订库 `RevisionLibrary`、`replace` / `preserve` 补丁、版本与批次记录、边界模式调整、字节保真校验 |
 | `solo/sample.py` | 确定性合成原件生成器（ESC/PAIR 故意跨 128 KiB 块，含模式切换、空替换、连续补丁与非法尾部所需素材） |
 | `solo/demo.py` | 演示：真实原件、两批修订、未修改字节核对、错误报告、较大语料，写出 `artifacts/` |
-| `solo/__main__.py` | CLI：`decode/check/encode/revise/demo` |
+| `solo/ledger.py` | 跨页代班簿：`parse_page` / `ledger_from_versions` / `dispute_replay` / `format_ledger` / `LedgerBook`，继承链与版本字节区间 |
+| `solo/roster.py` | 工会轮值：`GroupRoster` / `Leave` / `Roster`，资格、半开请假、应叫者、争议、顺序查询 |
+| `solo/ledger_sample.py` | 确定性、真实编码的双/三页样本（含 PAIR 内字节 `7C` 与空切换陷阱） |
+| `solo/__main__.py` | CLI：`decode/check/encode/revise/demo/ledger` |
 | `tests/test_solo.py` | 独立参考状态机、差分测试、跨块、检查点、修订、规模测试 |
-| `artifacts/` | 运行 `python3 -m solo.demo` 生成的真实原件、各版本字节与 `manifest.json` |
+| `tests/test_ledger.py` | 代班簿解析/继承/链校验、工会轮值与争议、缺页/插回重演、逐条人工小账核对 |
+| `artifacts/` | 运行 `python3 -m solo.demo` 生成的真实原件、各版本字节、`manifest.json` 与 `ledger_manifest.json` |
 
 ## SOLO 编码（题面定义）
 
@@ -75,6 +79,7 @@ python3 -m solo.demo                          # 演示并写 artifacts/
 python3 -m solo check artifacts/original.bin
 python3 -m solo decode --checkpoint 10 artifacts/version_1.bin
 python3 -m solo revise artifacts/original.bin patches.json > new.bin
+python3 -m solo ledger ledger_config.json     # 联查代班簿与工会轮值
 ```
 
 `patches.json` 格式：
@@ -95,3 +100,59 @@ python3 -m solo revise artifacts/original.bin patches.json > new.bin
 - 修订：未修改区间字节等同、每版本可重开解码、失败批次不发布、preserve 逐字节
   保留、新文本等于同批替换、无悬空模式。
 - 规模：10 MiB 原件、一批 100 个补丁（`ScaleTests`），未修改运行按原字节复制。
+
+## 跨页代班簿与工会轮值联查
+
+### 代班簿格式与继承
+
+页首为 `PAGE|页号|接前页号或 -`，其余为 `时序号|班组|工人|回应`。回应只接受
+`YES` / `NO` / `MISS` 三个可编码 ASCII 业务码。班组、工人字段写 `=` 表示继承：
+
+- 页内首笔之后的 `=` 继承同页上一笔有效值（`same_page`）；
+- 接续页首行的 `=` 只继承**声明前页**末笔的值（`prev_page`）；
+- 起页首行写 `=` 无从继承，报 `inherit_without_source`；
+- 前页缺失时整条链接拒绝并给出受影响页，**绝不**从相邻文件的页偷值。
+
+解析全部基于解码后的字符及其字节区间。PAIR 字符内的字节 `7C`、以及不产生字符的
+`FF 00` / `FF 01` 纯切换，都不会被当成分栏（见 `TrapTests`，同一行按字节切会多出
+一列，按字符切仍是四列）。
+
+### 页链
+
+页可任意顺序到达；每页至多声明一个前页，因而至多一个后继。重复页号、缺页、循环、
+两个后继（分叉）都抛 `LedgerError`，其 `.pages` 给出受影响页。每笔 `Notice` 记录：
+实际值、填字来源（`explicit` / `same_page` / `prev_page`）、逐跳继承链、以及该值与
+最终来源值各自的**版本字节区间**（`ByteSpan`）。先按页内顺序解释，再按时序号输出。
+
+### 版本与重演
+
+`LedgerBook` 每页一个 `RevisionLibrary`，更正即为普通文本补丁；旧版字节保留，
+可用 `book.ledger(select={页: 版本})` 固定旧版重查。`dispute_replay(旧页, 新页,
+roster)` 用两个冻结版本重演，指出哪些通知的结论发生了改变——更正会作用到所有
+真正依赖它的通知（例如改接续页首行所继承的前页值）。
+
+### 工会轮值
+
+`GroupRoster` 为每班组给出不重名的起始轮序、资格（`qualified` 或
+`qualified_from`）和半开请假区间 `[start, end)`。通知时刻在队列内从头扫描，取首位
+同时合格且不在假者：
+
+- 实际所叫不符 → 记争议并给出应叫者，轮序**原样不动**，顺位留到下一笔；
+- 叫对后：`YES` / `NO` 移到队尾，`MISS` 留原位；
+- 暂不具资格者留原位，恢复资格后仍占原顺位；
+- 上游只读轮序，从不改写。
+
+`Roster.replay` 返回每笔的 `Call`（应叫者、实际、是否争议、跳过的原因、前后顺序）；
+`who_at` / `disputes_at` / `order_at` / `order_after` 为独立查询，均从头重算，与查询
+先后无关。题面示例见 `RosterExampleTests`：`A,B,C` 下第二笔应为 `B`；把首笔改
+`MISS` 后第二笔应为 `A`；固定首笔 `YES` 且 `B`、`C` 在时刻 2 同时请假时次笔应为 `A`。
+
+### `ledger` CLI 配置
+
+```json
+{"pages": [{"page": 1, "version": 0, "file": "ledger_page_1_v0.bin"}],
+ "roster": {"G": {"rotation": ["A","B","C"],
+                   "qualified": ["A","B","C"],
+                   "qualified_from": {},
+                   "leaves": [{"worker": "B", "start": 2, "end": 3}]}}}
+```

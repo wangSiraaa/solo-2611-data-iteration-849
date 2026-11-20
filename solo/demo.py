@@ -16,7 +16,15 @@ import sys
 import time
 
 from .codec import DecodeError, Decoder, decode_document, encode_text
+from .ledger import (
+    PageVersion,
+    dispute_replay,
+    format_ledger,
+    ledger_from_versions,
+)
+from .ledger_sample import build_sample
 from .revision import PatchRecord, RevisionLibrary, preserve, replace
+from .roster import GroupRoster, Leave, Roster
 from .sample import generate_body
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "artifacts")
@@ -204,6 +212,111 @@ def demo(log=print) -> dict:
                 "boundary_adjustments": [a.summary() for a in batch_rec.boundary_adjustments],
             }
         )
+
+    # ---- Ledger + roster demonstration (real encoded pages) --------------
+    sample = build_sample()
+    sample_pages = {p.page: p for p in sample.pages}
+    roster = Roster(
+        [
+            GroupRoster(g, tuple(rot), frozenset(rot))
+            for g, rot in sample.rotations.items()
+        ]
+    )
+    log("== substitute-duty ledger (real SOLO pages) ==")
+    for pv_ in sample.pages:
+        doc = decode_document(pv_.body)
+        log(f"  page {pv_.page} v{pv_.version}: {doc.text!r}")
+        log(f"    bytes {pv_.body.hex()}")
+    ledger = ledger_from_versions(sample.pages)
+    old_calls = roster.replay(ledger.notices)
+    for line in format_ledger(ledger, calls=old_calls):
+        log("  " + line)
+
+    corrected_pages = (
+        PageVersion(1, 1, sample.corrected_page1),
+        sample_pages[2],
+        sample_pages[3],
+    )
+    replay = dispute_replay(sample.pages, corrected_pages, roster)
+    changed = [c["seq"] for c in replay["changed"]]
+    log(f"== correction replay (page 1 YES->MISS; changed seqs {changed}) ==")
+    for line in format_ledger(
+        replay["new_ledger"], calls=replay["new_calls"], changed_seqs=changed
+    ):
+        log("  " + line)
+    log(f"  old order {replay['old_order']}")
+    log(f"  new order {replay['new_order']}")
+
+    # Missing page then reinserted: the chain must reject, then reproduce.
+    try:
+        ledger_from_versions((sample_pages[1], sample_pages[3]))
+    except Exception as exc:  # noqa: BLE001 - demo shows the affected pages
+        log(f"== missing page 2 ==\n  rejected: {exc}")
+    restored = ledger_from_versions(
+        (sample_pages[1], sample_pages[2], sample_pages[3])
+    )
+    log(
+        f"== page 2 reinserted ==\n  rows identical to full book: "
+        f"{restored.rows() == ledger.rows()}"
+    )
+
+    ledger_manifest = {
+        "encoding": "real SOLO bodies; decoded before parsing",
+        "pages": [],
+        "roster": {
+            g: {"rotation": list(rot)} for g, rot in sample.rotations.items()
+        },
+        "notices": [
+            {
+                "seq": n.seq,
+                "group": n.group,
+                "worker": n.worker,
+                "response": n.response,
+                "page": n.page,
+                "version": n.version,
+                "group_source": n.group_fill.source,
+                "worker_source": n.worker_fill.source,
+                "worker_origin": (
+                    f"p{n.worker_fill.origin_page}v{n.worker_fill.origin_version}"
+                    f":seq{n.worker_fill.origin_seq}"
+                ),
+                "worker_origin_bytes": list(n.worker_fill.origin_span.as_tuple()),
+                "worker_chain": [str(link) for link in n.worker_fill.chain],
+                "expected": next(c.expected for c in old_calls if c.seq == n.seq),
+                "disputed": next(c.disputed for c in old_calls if c.seq == n.seq),
+            }
+            for n in ledger.notices
+        ],
+        "dispute_replay": {
+            "changed_seqs": changed,
+            "old_order": {k: list(v) for k, v in replay["old_order"].items()},
+            "new_order": {k: list(v) for k, v in replay["new_order"].items()},
+        },
+    }
+    for pv_ in sample.pages:
+        name = f"ledger_page_{pv_.page}_v{pv_.version}.bin"
+        with open(os.path.join(OUT_DIR, name), "wb") as fh:
+            fh.write(pv_.body)
+        ledger_manifest["pages"].append(
+            {
+                "page": pv_.page,
+                "version": pv_.version,
+                "path": name,
+                "bytes": len(pv_.body),
+                "sha256": _sha(pv_.body),
+                "text": decode_document(pv_.body).text,
+            }
+        )
+    with open(os.path.join(OUT_DIR, "ledger_corrected_page_1.bin"), "wb") as fh:
+        fh.write(sample.corrected_page1)
+    ledger_manifest["corrected_page_1"] = {
+        "path": "ledger_corrected_page_1.bin",
+        "sha256": _sha(sample.corrected_page1),
+        "text": decode_document(sample.corrected_page1).text,
+    }
+    with open(os.path.join(OUT_DIR, "ledger_manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump(ledger_manifest, fh, ensure_ascii=False, indent=2)
+    manifest["ledger"] = "ledger_manifest.json"
 
     manifest["elapsed_seconds"] = round(time.time() - started, 3)
     with open(os.path.join(OUT_DIR, "manifest.json"), "w", encoding="utf-8") as fh:

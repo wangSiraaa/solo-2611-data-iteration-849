@@ -1,0 +1,184 @@
+{
+  "encoding": "real SOLO bodies; decoded before parsing",
+  "pages": [
+    {
+      "page": 1,
+      "version": 0,
+      "path": "ledger_page_1_v0.bin",
+      "bytes": 30,
+      "sha256": "affcb46041b3f36b9eda2f2df35f9a11e788a31c82c7a7c3a63cc731a943ef5b",
+      "text": "PAGE|1|-\n1|G|A|YES\n2|=|A|NO\n"
+    },
+    {
+      "page": 2,
+      "version": 0,
+      "path": "ledger_page_2_v0.bin",
+      "bytes": 35,
+      "sha256": "f9f7e4092d42b4b060552585839ca9362f39d300b8f471a7b52eb4031ffeb20b",
+      "text": "PAGE|2|1\n3|=|=|MISS\n4|H|佼|YES\n"
+    },
+    {
+      "page": 3,
+      "version": 0,
+      "path": "ledger_page_3_v0.bin",
+      "bytes": 18,
+      "sha256": "d2edd1fbd912e1559aed84f483cb5878ff8c542d4a2ba16c4a73a132bfa248af",
+      "text": "PAGE|3|2\n5|=|=|NO\n"
+    }
+  ],
+  "roster": {
+    "G": {
+      "rotation": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    "H": {
+      "rotation": [
+        "佼",
+        "D",
+        "E"
+      ]
+    }
+  },
+  "notices": [
+    {
+      "seq": 1,
+      "group": "G",
+      "worker": "A",
+      "response": "YES",
+      "page": 1,
+      "version": 0,
+      "group_source": "explicit",
+      "worker_source": "explicit",
+      "worker_origin": "p1v0:seq1",
+      "worker_origin_bytes": [
+        15,
+        16
+      ],
+      "worker_chain": [
+        "p1v0:seq1.worker='A'[explicit][15,16)"
+      ],
+      "expected": "A",
+      "disputed": false
+    },
+    {
+      "seq": 2,
+      "group": "G",
+      "worker": "A",
+      "response": "NO",
+      "page": 1,
+      "version": 0,
+      "group_source": "same_page",
+      "worker_source": "explicit",
+      "worker_origin": "p1v0:seq2",
+      "worker_origin_bytes": [
+        25,
+        26
+      ],
+      "worker_chain": [
+        "p1v0:seq2.worker='A'[explicit][25,26)"
+      ],
+      "expected": "B",
+      "disputed": true
+    },
+    {
+      "seq": 3,
+      "group": "G",
+      "worker": "A",
+      "response": "MISS",
+      "page": 2,
+      "version": 0,
+      "group_source": "prev_page",
+      "worker_source": "prev_page",
+      "worker_origin": "p1v0:seq2",
+      "worker_origin_bytes": [
+        25,
+        26
+      ],
+      "worker_chain": [
+        "p1v0:seq2.worker='A'[explicit][25,26)",
+        "p2v0:seq3.worker='A'[prev_page][13,14)"
+      ],
+      "expected": "B",
+      "disputed": true
+    },
+    {
+      "seq": 4,
+      "group": "H",
+      "worker": "佼",
+      "response": "YES",
+      "page": 2,
+      "version": 0,
+      "group_source": "explicit",
+      "worker_source": "explicit",
+      "worker_origin": "p2v0:seq4",
+      "worker_origin_bytes": [
+        26,
+        28
+      ],
+      "worker_chain": [
+        "p2v0:seq4.worker='佼'[explicit][26,28)"
+      ],
+      "expected": "佼",
+      "disputed": false
+    },
+    {
+      "seq": 5,
+      "group": "H",
+      "worker": "佼",
+      "response": "NO",
+      "page": 3,
+      "version": 0,
+      "group_source": "prev_page",
+      "worker_source": "prev_page",
+      "worker_origin": "p2v0:seq4",
+      "worker_origin_bytes": [
+        26,
+        28
+      ],
+      "worker_chain": [
+        "p2v0:seq4.worker='佼'[explicit][26,28)",
+        "p3v0:seq5.worker='佼'[prev_page][13,14)"
+      ],
+      "expected": "D",
+      "disputed": true
+    }
+  ],
+  "dispute_replay": {
+    "changed_seqs": [
+      1,
+      2
+    ],
+    "old_order": {
+      "G": [
+        "B",
+        "C",
+        "A"
+      ],
+      "H": [
+        "D",
+        "E",
+        "佼"
+      ]
+    },
+    "new_order": {
+      "G": [
+        "B",
+        "C",
+        "A"
+      ],
+      "H": [
+        "D",
+        "E",
+        "佼"
+      ]
+    }
+  },
+  "corrected_page_1": {
+    "path": "ledger_corrected_page_1.bin",
+    "sha256": "0d897022b4a0238598d62ab3ebd46ce981941c7a4575074eab18777425e47ab9",
+    "text": "PAGE|1|-\n1|G|A|MISS\n2|=|A|NO\n"
+  }
+}
